@@ -1,0 +1,546 @@
+// Prisma schema — Network Mikro
+// Manual social task verification platform
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  REVIEWER
+  BRAND
+  USER
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+  PENDING_VERIFICATION
+}
+
+enum Platform {
+  INSTAGRAM
+  TIKTOK
+  YOUTUBE
+  X
+  FACEBOOK
+  LINKEDIN
+  THREADS
+  OTHER
+}
+
+enum SocialAccountType {
+  PERSONAL
+  BUSINESS
+  CREATOR
+}
+
+enum SocialAccountStatus {
+  ACTIVE
+  INACTIVE
+  FLAGGED
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum TaskStatus {
+  DRAFT
+  OPEN
+  PAUSED
+  FULL
+  EXPIRED
+  ARCHIVED
+}
+
+enum TaskActionType {
+  POST
+  STORY
+  REEL
+  COMMENT
+  LIKE
+  SHARE
+  FOLLOW
+  REVIEW
+  OTHER
+}
+
+enum AssignmentStatus {
+  CLAIMED
+  SUBMITTED
+  APPROVED
+  REJECTED
+  REVISION_REQUESTED
+  EXPIRED
+  CANCELLED
+}
+
+enum SubmissionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REVISION_REQUESTED
+}
+
+enum EarningStatus {
+  PENDING
+  LOCKED      // inside an open payout batch
+  PAID
+  CANCELLED
+}
+
+enum PayoutBatchStatus {
+  DRAFT
+  OPEN
+  PROCESSING
+  PAID
+  CANCELLED
+}
+
+enum PayoutItemStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+enum NotificationType {
+  WELCOME
+  TASK_CLAIMED
+  SUBMISSION_APPROVED
+  SUBMISSION_REJECTED
+  SUBMISSION_REVISION
+  EARNING_CREDITED
+  PAYOUT_PAID
+  ACCOUNT_FLAGGED
+  SYSTEM
+}
+
+enum TrustScoreReason {
+  INITIAL
+  SUBMISSION_APPROVED
+  SUBMISSION_REJECTED
+  SUBMISSION_REVISION
+  SUBMISSION_ON_TIME
+  SUBMISSION_FAKE
+  STREAK_BONUS
+  CLAIM_NOT_SUBMITTED
+  MANUAL_ADJUSTMENT
+}
+
+enum AuditAction {
+  USER_CREATED
+  USER_UPDATED
+  USER_STATUS_CHANGED
+  USER_ROLE_CHANGED
+  USER_LOGIN
+  USER_LOGOUT
+  SOCIAL_ACCOUNT_CREATED
+  SOCIAL_ACCOUNT_UPDATED
+  SOCIAL_ACCOUNT_DELETED
+  CAMPAIGN_CREATED
+  CAMPAIGN_UPDATED
+  CAMPAIGN_STATUS_CHANGED
+  TASK_CREATED
+  TASK_UPDATED
+  TASK_STATUS_CHANGED
+  TASK_CLAIMED
+  SUBMISSION_CREATED
+  SUBMISSION_APPROVED
+  SUBMISSION_REJECTED
+  SUBMISSION_REVISION_REQUESTED
+  EARNING_CREATED
+  EARNING_CANCELLED
+  PAYOUT_BATCH_CREATED
+  PAYOUT_BATCH_UPDATED
+  PAYOUT_BATCH_PAID
+  PAYOUT_ITEM_PAID
+  TRUST_SCORE_CHANGED
+  SETTING_UPDATED
+}
+
+// ============================================================
+// CORE MODELS
+// ============================================================
+
+model User {
+  id                 String     @id @default(cuid())
+  email              String     @unique
+  passwordHash       String
+  name               String
+  role               Role       @default(USER)
+  status             UserStatus @default(ACTIVE)
+
+  // Profile
+  phone              String?
+  country            String?
+  avatarUrl          String?
+  bio                String?
+
+  // Trust & limits
+  trustScore         Int        @default(50)
+  dailyTaskLimit     Int        @default(5)
+  weeklyTaskLimit    Int        @default(25)
+
+  // Aggregates
+  totalEarned        Int        @default(0)   // cents
+  totalPaid          Int        @default(0)   // cents
+  balance            Int        @default(0)   // cents (earned - paid - cancelled)
+  approvedCount      Int        @default(0)
+  rejectedCount      Int        @default(0)
+  currentStreak      Int        @default(0)
+  lastActiveAt       DateTime?
+
+  // Timestamps
+  emailVerifiedAt    DateTime?
+  deletedAt          DateTime?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  socialAccounts     SocialAccount[]
+  assignments        TaskAssignment[]
+  submissions        Submission[]
+  earnings           Earning[]
+  payoutItems        PayoutItem[]
+  trustScoreLogs     TrustScoreLog[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]            @relation("ActorLogs")
+  reviewedSubmissions Submission[]         @relation("ReviewerSubmissions")
+  createdCampaigns   Campaign[]            @relation("CampaignCreator")
+
+  @@index([role])
+  @@index([status])
+  @@index([trustScore])
+  @@index([createdAt])
+}
+
+model SocialAccount {
+  id              String              @id @default(cuid())
+  userId          String
+  user            User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  platform        Platform
+  username        String
+  profileUrl      String
+  followerCount   Int                 @default(0)
+  accountType     SocialAccountType   @default(PERSONAL)
+  status          SocialAccountStatus @default(ACTIVE)
+  verified        Boolean             @default(false)
+  notes           String?
+
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  submissions     Submission[]
+
+  @@unique([userId, platform, username])
+  @@index([platform])
+  @@index([status])
+}
+
+model Campaign {
+  id              String         @id @default(cuid())
+  name            String
+  slug            String         @unique
+  description     String?
+  brand           String?
+  status          CampaignStatus @default(DRAFT)
+
+  startsAt        DateTime?
+  endsAt          DateTime?
+
+  budgetCents     Int            @default(0)
+  spentCents      Int            @default(0)
+
+  createdById     String
+  createdBy       User           @relation("CampaignCreator", fields: [createdById], references: [id])
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  assets          CampaignAsset[]
+  tasks           Task[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model CampaignAsset {
+  id            String   @id @default(cuid())
+  campaignId    String
+  campaign      Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  title         String?
+  fileUrl       String
+  fileKey       String
+  mimeType      String
+  sizeBytes     Int
+  caption       String?
+  hashtags      String?
+  linkUrl       String?
+  instructions  String?
+
+  createdAt     DateTime @default(now())
+
+  @@index([campaignId])
+}
+
+model Task {
+  id                    String         @id @default(cuid())
+  campaignId            String
+  campaign              Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  title                 String
+  description           String?
+  platform              Platform
+  action                TaskActionType @default(POST)
+  status                TaskStatus     @default(DRAFT)
+
+  rewardCents           Int            @default(0)
+
+  // Submission requirements
+  requireScreenshot     Boolean        @default(true)
+  requirePostUrl        Boolean        @default(false)
+  requireCaption        Boolean        @default(false)
+  minFollowers          Int            @default(0)
+  minTrustScore         Int            @default(0)
+  allowedAccountTypes   SocialAccountType[]
+
+  // Limits & timing
+  maxAssignments        Int            @default(0)   // 0 = unlimited
+  assignedCount         Int            @default(0)
+  approvedCount         Int            @default(0)
+  submissionWindowHours Int            @default(24)
+  startsAt              DateTime?
+  endsAt                DateTime?
+
+  // Content context
+  instructions          String?
+  caption               String?
+  hashtags              String?
+  linkUrl               String?
+
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  assignments           TaskAssignment[]
+  submissions           Submission[]
+
+  @@index([campaignId])
+  @@index([status])
+  @@index([platform])
+  @@index([createdAt])
+}
+
+model TaskAssignment {
+  id            String           @id @default(cuid())
+  taskId        String
+  task          Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  status        AssignmentStatus @default(CLAIMED)
+  claimedAt     DateTime         @default(now())
+  deadlineAt    DateTime
+  submittedAt   DateTime?
+  reviewedAt    DateTime?
+  cancelledAt   DateTime?
+
+  submissionId  String?          @unique
+  submission    Submission?      @relation(fields: [submissionId], references: [id], onDelete: SetNull)
+
+  @@unique([taskId, userId])
+  @@index([userId, status])
+  @@index([status])
+  @@index([deadlineAt])
+}
+
+model Submission {
+  id                 String           @id @default(cuid())
+  taskId             String
+  task               Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId             String
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccountId    String?
+  socialAccount      SocialAccount?   @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+
+  status             SubmissionStatus @default(PENDING)
+
+  // Proof
+  screenshotUrl      String
+  screenshotKey      String
+  screenshotMime     String
+  screenshotSize     Int
+  postUrl            String?
+  note               String?
+
+  // Review metadata
+  reviewerId         String?
+  reviewer           User?            @relation("ReviewerSubmissions", fields: [reviewerId], references: [id], onDelete: SetNull)
+  reviewedAt         DateTime?
+  reviewNote         String?
+  rejectReason       String?
+  riskScore          Int              @default(0)     // 0-100, heuristic
+  flagged            Boolean          @default(false)
+
+  submittedAt        DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  earning            Earning?
+  assignment         TaskAssignment?
+
+  @@index([status])
+  @@index([userId])
+  @@index([taskId])
+  @@index([reviewerId])
+  @@index([submittedAt])
+  @@index([flagged])
+}
+
+model Earning {
+  id             String        @id @default(cuid())
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  submissionId   String        @unique
+  submission     Submission    @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  amountCents    Int
+  status         EarningStatus @default(PENDING)
+
+  payoutItemId   String?
+  payoutItem     PayoutItem?   @relation(fields: [payoutItemId], references: [id], onDelete: SetNull)
+
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([userId, status])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model PayoutBatch {
+  id              String            @id @default(cuid())
+  name            String
+  periodStart     DateTime
+  periodEnd       DateTime
+  status          PayoutBatchStatus @default(DRAFT)
+
+  totalCents      Int               @default(0)
+  itemCount       Int               @default(0)
+
+  createdById     String
+  paidAt          DateTime?
+  notes           String?
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  items           PayoutItem[]
+
+  @@index([status])
+  @@index([periodStart])
+}
+
+model PayoutItem {
+  id              String           @id @default(cuid())
+  batchId         String
+  batch           PayoutBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  amountCents     Int
+  status          PayoutItemStatus @default(PENDING)
+  paidAt          DateTime?
+  reference       String?
+  notes           String?
+
+  earnings        Earning[]
+
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@unique([batchId, userId])
+  @@index([status])
+  @@index([userId])
+}
+
+model TrustScoreLog {
+  id         String           @id @default(cuid())
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  delta      Int
+  before     Int
+  after      Int
+  reason     TrustScoreReason
+  refType    String?
+  refId      String?
+  note       String?
+
+  createdAt  DateTime         @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model Notification {
+  id         String           @id @default(cuid())
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type       NotificationType
+  title      String
+  body       String?
+  linkUrl    String?
+  readAt     DateTime?
+
+  createdAt  DateTime         @default(now())
+
+  @@index([userId, readAt])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  actorId    String?
+  actor      User?       @relation("ActorLogs", fields: [actorId], references: [id], onDelete: SetNull)
+
+  action     AuditAction
+  entityType String
+  entityId   String?
+  metadata   Json?
+
+  ip         String?
+  userAgent  String?
+
+  createdAt  DateTime    @default(now())
+
+  @@index([actorId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model SystemSetting {
+  key        String   @id
+  value      Json
+  updatedAt  DateTime @updatedAt
+  updatedBy  String?
+}
