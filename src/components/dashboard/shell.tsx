@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { UserMenu } from "@/components/dashboard/user-menu";
 import { Nav, type NavItem } from "@/components/dashboard/nav";
+import { MobileNav } from "@/components/dashboard/mobile-nav";
 import type { Role } from "@prisma/client";
 
 interface ShellProps {
@@ -39,7 +40,12 @@ export function DashboardShell({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b bg-background/80 px-4 backdrop-blur">
-          <Link href={brandHref} className="font-semibold md:hidden">
+          <MobileNav
+            items={items}
+            brandHref={brandHref}
+            brandLabel={brandLabel}
+          />
+          <Link href={brandHref} className="truncate font-semibold md:hidden">
             {brandLabel}
           </Link>
           <div className="ml-auto flex items-center gap-3">
